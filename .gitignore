@@ -23,6 +23,7 @@ env/
 ResearchGeometryLibrary/RGeoLib/bin/
 ResearchGeometryLibrary/RGeoLib/obj/
 ResearchGeometryLibrary/RGeoLib/packages/
+RGeoTest/
 
 # Environment and database
 .env

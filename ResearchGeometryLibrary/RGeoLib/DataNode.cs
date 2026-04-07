@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -703,6 +703,28 @@ namespace RGeoLib
                 return inputNode.treeNodeMesh;
             }
         }
+        /// <summary>
+        /// Convert absolute areas to parent-relative ratios in-place.
+        /// After conversion every child.area is a fraction of its parent
+        /// (children sum to ~1.0) and the root area is set to 1.0.
+        /// This makes the tree safe for <see cref="subdivideWithMeshRatio"/>
+        /// which always produces valid geometry regardless of boundary shape.
+        /// </summary>
+        public void convertToRatios()
+        {
+            double parentArea = this.area;
+            if (parentArea > 0 && this.children != null)
+            {
+                foreach (var child in this.children)
+                {
+                    double childOrigArea = child.area;
+                    child.convertToRatios();
+                    child.area = childOrigArea / parentArea;
+                }
+            }
+            this.area = 1.0;
+        }
+
         public static NMesh subdivideWithMesh(DataNode inputNode, NMesh inputMesh)
         {
             inputNode.AddMesh(inputMesh);
