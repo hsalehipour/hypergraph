@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -1913,11 +1913,199 @@ namespace RGeoLib
             NMesh meshLeft = RSplit.CombineNMeshStrip(tempMeshTuple.Item2);
             NMesh meshRight = RSplit.CombineNMeshStrip(tempMeshTuple.Item3);
 
-            //NMesh meshLeft = RSplit.mergeNMesh(tempMeshTuple.Item2);
-            //NMesh meshRight = RSplit.mergeNMesh(tempMeshTuple.Item3);
+            double fallbackTolerance = 0.01;
+            bool leftValid = meshLeft != null && meshLeft.faceList != null
+                             && meshLeft.faceList.Count == 1 && meshLeft.Area > fallbackTolerance;
+            bool rightValid = meshRight != null && meshRight.faceList != null
+                              && meshRight.faceList.Count == 1 && meshRight.Area > fallbackTolerance;
+
+            if (!leftValid || !rightValid)
+            {
+                return SubdivideNFaceDirectionClipper(face1, splitRatio, radAngle);
+            }
 
             return new Tuple<NMesh, NMesh>(meshLeft, meshRight);
         }
+
+        /// <summary>
+        /// Clipper2-based fallback for SubdivideNFaceDirection.
+        /// Splits a polygon at the given angle using a half-plane clip and
+        /// binary-searches for the cut position that achieves the target
+        /// area ratio.  Works reliably on non-convex polygons where the
+        /// strip-based approach fails.
+        /// </summary>
+        public static Tuple<NMesh, NMesh> SubdivideNFaceDirectionClipper(
+            NFace face, double splitRatio, double radAngle)
+        {
+            // The strip method sorts faces along (-sin(angle), cos(angle)) ascending,
+            // then reverses for clockwise faces before accumulating facesLeft.
+            // CW=False ⇒ facesLeft starts from LOW projection  ⇒ Item1 = low side.
+            // CW=True  ⇒ reversed, facesLeft starts from HIGH  ⇒ Item1 = high side.
+            // Our binary search always puts targetArea on bestLeft = low-projection side.
+            // For CW=True we target (1 - splitRatio) on the low side so the high side
+            // gets splitRatio, then swap the return (see end of method).
+            double dx = -Math.Sin(radAngle);
+            double dy = Math.Cos(radAngle);
+
+            List<Vec3d> pts = face.getPoints();
+            double pmin = double.MaxValue;
+            double pmax = double.MinValue;
+            double cxSum = 0, cySum = 0;
+            foreach (Vec3d p in pts)
+            {
+                double proj = dx * p.X + dy * p.Y;
+                if (proj < pmin) pmin = proj;
+                if (proj > pmax) pmax = proj;
+                cxSum += p.X;
+                cySum += p.Y;
+            }
+            double cx = cxSum / pts.Count;
+            double cy = cySum / pts.Count;
+
+            double totalArea = face.Area;
+            double targetArea = face.IsClockwise
+                ? (1.0 - splitRatio) * totalArea
+                : splitRatio * totalArea;
+
+            double maxCoord = 0;
+            foreach (Vec3d p in pts)
+            {
+                if (Math.Abs(p.X) > maxCoord) maxCoord = Math.Abs(p.X);
+                if (Math.Abs(p.Y) > maxCoord) maxCoord = Math.Abs(p.Y);
+            }
+            double extent = maxCoord * 3 + 10000;
+
+            double lo = pmin;
+            double hi = pmax;
+
+            NMesh bestLeft = null;
+            NMesh bestRight = null;
+
+            for (int iter = 0; iter < 60; iter++)
+            {
+                double mid = (lo + hi) / 2.0;
+
+                double baseProj = dx * cx + dy * cy;
+                double shift = mid - baseProj;
+                double px = cx + shift * dx;
+                double py = cy + shift * dy;
+
+                // Perpendicular direction: (-dy, dx)
+                double perpX = -dy;
+                double perpY = dx;
+
+                // Half-plane rectangle: everything on the "low projection" side of the cut
+                // Four corners: two far along the cut line, two far back
+                List<Vec3d> hpCorners = new List<Vec3d>();
+                hpCorners.Add(new Vec3d(px + perpX * extent, py + perpY * extent, 0));
+                hpCorners.Add(new Vec3d(px - perpX * extent, py - perpY * extent, 0));
+                hpCorners.Add(new Vec3d(px - perpX * extent - dx * extent, py - perpY * extent - dy * extent, 0));
+                hpCorners.Add(new Vec3d(px + perpX * extent - dx * extent, py + perpY * extent - dy * extent, 0));
+
+                NFace halfPlane = new NFace(hpCorners);
+
+                NMesh leftMesh = RClipper.clipperIntersection(face, halfPlane);
+
+                double leftArea = 0;
+                if (leftMesh != null && leftMesh.faceList != null)
+                    leftArea = leftMesh.Area;
+
+                if (leftArea < targetArea)
+                    lo = mid;
+                else
+                    hi = mid;
+            }
+
+            // Final clip at converged position
+            double finalMid = (lo + hi) / 2.0;
+            double finalBaseProj = dx * cx + dy * cy;
+            double finalShift = finalMid - finalBaseProj;
+            double fpx = cx + finalShift * dx;
+            double fpy = cy + finalShift * dy;
+            double fperpX = -dy;
+            double fperpY = dx;
+
+            List<Vec3d> finalCorners = new List<Vec3d>();
+            finalCorners.Add(new Vec3d(fpx + fperpX * extent, fpy + fperpY * extent, 0));
+            finalCorners.Add(new Vec3d(fpx - fperpX * extent, fpy - fperpY * extent, 0));
+            finalCorners.Add(new Vec3d(fpx - fperpX * extent - dx * extent, fpy - fperpY * extent - dy * extent, 0));
+            finalCorners.Add(new Vec3d(fpx + fperpX * extent - dx * extent, fpy + fperpY * extent - dy * extent, 0));
+            NFace finalHalfPlane = new NFace(finalCorners);
+
+            bestLeft = RClipper.clipperIntersection(face, finalHalfPlane);
+            bestRight = RClipper.clipperDifference(face, finalHalfPlane);
+
+            if (bestLeft == null || bestLeft.faceList == null || bestLeft.faceList.Count == 0)
+                bestLeft = new NMesh(new List<NFace>());
+            if (bestRight == null || bestRight.faceList == null || bestRight.faceList.Count == 0)
+                bestRight = new NMesh(new List<NFace>());
+
+            // Clean output faces
+            foreach (NFace f in bestLeft.faceList)
+            {
+                f.updateEdgeConnectivity();
+                f.checkFor180Angle();
+                f.mergeDuplicateVertex();
+            }
+            foreach (NFace f in bestRight.faceList)
+            {
+                f.updateEdgeConnectivity();
+                f.checkFor180Angle();
+                f.mergeDuplicateVertex();
+            }
+
+            // Merge multi-face results to exactly 1 face per side.
+            // Clipper can produce disjoint fragments on non-convex polygons.
+            bestLeft = MergeToSingleFace(bestLeft);
+            bestRight = MergeToSingleFace(bestRight);
+
+            // bestLeft = low-projection side. For CW=False faces the strip method's
+            // Item1 is also the low-projection side, so return as-is. For CW=True
+            // the strip method's Item1 is the HIGH-projection side (due to Reverse),
+            // so swap to stay consistent.
+            if (face.IsClockwise)
+                return new Tuple<NMesh, NMesh>(bestRight, bestLeft);
+            return new Tuple<NMesh, NMesh>(bestLeft, bestRight);
+        }
+
+        /// <summary>
+        /// Merge an NMesh with multiple faces into a single-face NMesh.
+        /// First tries Clipper2 union; if still multi-face (disjoint),
+        /// keeps only the largest piece to preserve the 1-face-per-side
+        /// contract expected by the BSP pipeline.
+        /// </summary>
+        private static NMesh MergeToSingleFace(NMesh mesh)
+        {
+            if (mesh == null || mesh.faceList == null || mesh.faceList.Count <= 1)
+                return mesh;
+
+            NMesh merged = RClipper.clipperUnion(mesh.faceList);
+            if (merged != null && merged.faceList != null && merged.faceList.Count == 1)
+            {
+                merged.faceList[0].updateEdgeConnectivity();
+                merged.faceList[0].checkFor180Angle();
+                merged.faceList[0].mergeDuplicateVertex();
+                return merged;
+            }
+
+            // Union still multi-face (truly disjoint fragments) — keep the largest
+            NFace largest = null;
+            double maxArea = -1;
+            List<NFace> candidates = (merged != null && merged.faceList != null)
+                ? merged.faceList : mesh.faceList;
+            foreach (NFace f in candidates)
+            {
+                if (f.Area > maxArea)
+                {
+                    maxArea = f.Area;
+                    largest = f;
+                }
+            }
+            if (largest != null)
+                return new NMesh(new List<NFace> { largest });
+            return mesh;
+        }
+
         public static Tuple<List<double>, NMesh> SubdivideNFaceMultipleDirection(NFace face, List<double> splitRatioList, List<double> splitAngleList)
         {
             

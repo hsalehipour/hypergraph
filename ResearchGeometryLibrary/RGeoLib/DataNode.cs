@@ -826,9 +826,20 @@ namespace RGeoLib
                 splitGroup_Tuple = RSplit.SubdivideNFaceMultipleDirection(faceInput, splitRatioList, splitAngleList);
             }
 
+            int expectedFaces = inputNode.children.Count;
+            int actualFaces = splitGroup_Tuple.Item2.faceList.Count;
+            if (actualFaces != expectedFaces)
+            {
+                Console.WriteLine("WARNING: SubdivideTree expected " + expectedFaces
+                    + " faces but got " + actualFaces + " for node " + inputNode.name);
+            }
+
             int currentIter = 0;
             foreach (NFace face in splitGroup_Tuple.Item2.faceList)
             {
+                if (currentIter >= mergeIdList.Count)
+                    break;
+
                 face.updateEdgeConnectivity();
 
                 /// Added 180check
@@ -858,6 +869,14 @@ namespace RGeoLib
 
             foreach (var child in inputNode.children)
             {
+                if (splitGroup_Tuple.Item2.faceList.Count == 0)
+                {
+                    Console.WriteLine("WARNING: No faces left to assign to child " + child.name);
+                    child.treeNodeMesh = new NMesh(new List<NFace>());
+                    iterator++;
+                    continue;
+                }
+
                 // Add a mesh to each child
                 child.treeNodeMesh = new NMesh(splitGroup_Tuple.Item2.faceList[0]);
                 splitGroup_Tuple.Item2.faceList.RemoveAt(0);
