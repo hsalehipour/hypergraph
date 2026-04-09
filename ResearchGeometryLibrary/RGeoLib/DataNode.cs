@@ -762,11 +762,8 @@ namespace RGeoLib
         }
         public static void SubdivideTree(DataNode inputNode, bool subdivisionActual)
         {
-            NFace faceInput = inputNode.treeNodeMesh.faceList[0];
-            inputNode.treeNodeMesh.faceList.RemoveAt(0);
-
-
-            // print values of first children
+            List<NFace> inputFaces = new List<NFace>(inputNode.treeNodeMesh.faceList);
+            inputNode.treeNodeMesh.faceList.Clear();
 
             List<double> splitRatioList = new List<double>();
             List<double> splitAngleList = new List<double>();
@@ -776,123 +773,80 @@ namespace RGeoLib
 
             foreach (var child in inputNode.children)
             {
-                // adds split ratios of all children to list
-                double current_split = child.area;
-                splitRatioList.Add(current_split);
-
-                double current_angle = child.angle;
-                splitAngleList.Add(current_angle);
-
-                string current_merge = child.mergeid;
-                mergeIdList.Add(current_merge);
-
-                string current_name = child.name;
-                uniqueIdList.Add(current_name);
-
-                List<string> neighbor_list = child.connected;
-                neighborIdList.Add(neighbor_list);
+                splitRatioList.Add(child.area);
+                splitAngleList.Add(child.angle);
+                mergeIdList.Add(child.mergeid);
+                uniqueIdList.Add(child.name);
+                neighborIdList.Add(child.connected);
             }
-
-            //Console.WriteLine("preparing .... ");
-
 
             splitRatioList.RemoveAt(splitRatioList.Count - 1);
             splitAngleList.RemoveAt(splitAngleList.Count - 1);
 
-            Tuple<List<double>, NMesh> splitGroup_Tuple;
+            foreach (NFace f in inputFaces)
+            {
+                f.checkFor180Angle();
+                f.checkForZeroEdge();
+                f.flipRH();
+                f.checkFor180Angle();
+                f.checkForZeroEdge();
+                f.flipRH();
+            }
+
+            Tuple<List<double>, List<NMesh>> splitResult;
 
             if (subdivisionActual == true)
             {
-                /// Added 180check
-                faceInput.checkFor180Angle();
-                faceInput.checkForZeroEdge();
-                faceInput.flipRH();
-                faceInput.checkFor180Angle();
-                faceInput.checkForZeroEdge();
-                faceInput.flipRH();
-
-                splitGroup_Tuple = RSplit.SubdivideNFaceMultipleDirectionActual(faceInput, splitRatioList, splitAngleList);
+                splitResult = RSplit.SubdivideMultiFaceMultipleDirectionActual(
+                    inputFaces, splitRatioList, splitAngleList);
             }
             else
             {
-                /// Added 180check
-                faceInput.checkFor180Angle();
-                faceInput.checkForZeroEdge();
-                faceInput.flipRH();
-                faceInput.checkFor180Angle();
-                faceInput.checkForZeroEdge();
-                faceInput.flipRH();
-
-                splitGroup_Tuple = RSplit.SubdivideNFaceMultipleDirection(faceInput, splitRatioList, splitAngleList);
+                splitResult = RSplit.SubdivideMultiFaceMultipleDirection(
+                    inputFaces, splitRatioList, splitAngleList);
             }
 
-            int expectedFaces = inputNode.children.Count;
-            int actualFaces = splitGroup_Tuple.Item2.faceList.Count;
-            if (actualFaces != expectedFaces)
+            List<NMesh> childMeshes = splitResult.Item2;
+
+            int expectedChildren = inputNode.children.Count;
+            int actualMeshes = childMeshes.Count;
+            if (actualMeshes != expectedChildren)
             {
-                Console.WriteLine("WARNING: SubdivideTree expected " + expectedFaces
-                    + " faces but got " + actualFaces + " for node " + inputNode.name);
+                Console.WriteLine("WARNING: SubdivideTree expected " + expectedChildren
+                    + " child meshes but got " + actualMeshes + " for node " + inputNode.name);
             }
 
-            int currentIter = 0;
-            foreach (NFace face in splitGroup_Tuple.Item2.faceList)
+            for (int i = 0; i < inputNode.children.Count; i++)
             {
-                if (currentIter >= mergeIdList.Count)
-                    break;
+                var child = inputNode.children[i];
 
-                face.updateEdgeConnectivity();
-
-                /// Added 180check
-                face.checkFor180Angle();
-                face.checkForZeroEdge();
-                face.flipRH();
-                face.checkFor180Angle();
-                face.checkForZeroEdge();
-                face.flipRH();
-
-                // add merge id to each face.
-                face.merge_id = mergeIdList[currentIter];
-                face.unique_id = uniqueIdList[currentIter];
-                face.neighbors_id = neighborIdList[currentIter];
-                currentIter++;
-
-                //Console.WriteLine(face.edgeList.Count);
-            }
-            //Console.WriteLine("split");
-
-
-
-            // assign the split meshes to the children of the input tree
-
-            int iterator = 0;
-            int numChildren = inputNode.children.Count;
-
-            foreach (var child in inputNode.children)
-            {
-                if (splitGroup_Tuple.Item2.faceList.Count == 0)
+                if (i < childMeshes.Count && childMeshes[i].faceList.Count > 0)
                 {
-                    Console.WriteLine("WARNING: No faces left to assign to child " + child.name);
-                    child.treeNodeMesh = new NMesh(new List<NFace>());
-                    iterator++;
-                    continue;
+                    NMesh childMesh = childMeshes[i];
+
+                    foreach (NFace face in childMesh.faceList)
+                    {
+                        face.updateEdgeConnectivity();
+                        face.checkFor180Angle();
+                        face.checkForZeroEdge();
+                        face.flipRH();
+                        face.checkFor180Angle();
+                        face.checkForZeroEdge();
+                        face.flipRH();
+
+                        face.merge_id = mergeIdList[i];
+                        face.unique_id = uniqueIdList[i];
+                        face.neighbors_id = neighborIdList[i];
+                    }
+
+                    child.treeNodeMesh = childMesh;
                 }
-
-                // Add a mesh to each child
-                child.treeNodeMesh = new NMesh(splitGroup_Tuple.Item2.faceList[0]);
-                splitGroup_Tuple.Item2.faceList.RemoveAt(0);
-                iterator++;
-
-                // Add the rest of the faces to the last child
-                if (iterator >= numChildren)
-                    child.treeNodeMesh.faceList.AddRange(splitGroup_Tuple.Item2.faceList);
-
-                //print mesh of child
-                //Console.WriteLine(child.name);
-                //Console.WriteLine(child.treeNodeMesh);
+                else
+                {
+                    Console.WriteLine("WARNING: No faces available for child " + child.name);
+                    child.treeNodeMesh = new NMesh(new List<NFace>());
+                }
             }
-
-
-            //Console.WriteLine(splitGroup_Tuple.Item2);
         }
 
 
@@ -997,11 +951,8 @@ namespace RGeoLib
         {
             try
             {
-                NFace faceInput = inputNode.treeNodeMesh.faceList[0];
-                inputNode.treeNodeMesh.faceList.RemoveAt(0);
-
-
-                // print values of first children
+                List<NFace> inputFaces = new List<NFace>(inputNode.treeNodeMesh.faceList);
+                inputNode.treeNodeMesh.faceList.Clear();
 
                 List<double> splitRatioList = new List<double>();
                 List<double> splitAngleList = new List<double>();
@@ -1011,100 +962,70 @@ namespace RGeoLib
 
                 foreach (var child in inputNode.children)
                 {
-                    // adds split ratios of all children to list
-                    double current_split = child.area;
-                    splitRatioList.Add(current_split);
-
-                    double current_angle = child.angle;
-                    splitAngleList.Add(current_angle);
-
-                    string current_merge = child.mergeid;
-                    mergeIdList.Add(current_merge);
-
-                    string current_name = child.name;
-                    uniqueIdList.Add(current_name);
-
-                    List<string> neighbor_list = child.connected;
-                    neighborIdList.Add(neighbor_list);
+                    splitRatioList.Add(child.area);
+                    splitAngleList.Add(child.angle);
+                    mergeIdList.Add(child.mergeid);
+                    uniqueIdList.Add(child.name);
+                    neighborIdList.Add(child.connected);
                 }
-
-                //Console.WriteLine("preparing .... ");
-
 
                 splitRatioList.RemoveAt(splitRatioList.Count - 1);
                 splitAngleList.RemoveAt(splitAngleList.Count - 1);
 
-                Tuple<List<double>, NMesh> splitGroup_Tuple;
+                foreach (NFace f in inputFaces)
+                {
+                    f.checkFor180Angle();
+                    f.checkForZeroEdge();
+                    f.flipRH();
+                    f.checkFor180Angle();
+                    f.checkForZeroEdge();
+                    f.flipRH();
+                }
+
+                Tuple<List<double>, List<NMesh>> splitResult;
 
                 if (subdivisionActual == true)
                 {
-                    /// Added 180check
-                    faceInput.checkFor180Angle();
-                    faceInput.checkForZeroEdge();
-                    faceInput.flipRH();
-                    faceInput.checkFor180Angle();
-                    faceInput.checkForZeroEdge();
-                    faceInput.flipRH();
-
-                    splitGroup_Tuple = RSplit.SubdivideNFaceMultipleDirectionActual(faceInput, splitRatioList, splitAngleList);
+                    splitResult = RSplit.SubdivideMultiFaceMultipleDirectionActual(
+                        inputFaces, splitRatioList, splitAngleList);
                 }
                 else
                 {
-                    /// Added 180check
-                    faceInput.checkFor180Angle();
-                    faceInput.checkForZeroEdge();
-                    faceInput.flipRH();
-                    faceInput.checkFor180Angle();
-                    faceInput.checkForZeroEdge();
-                    faceInput.flipRH();
-
-                    splitGroup_Tuple = RSplit.SubdivideNFaceMultipleDirection(faceInput, splitRatioList, splitAngleList);
+                    splitResult = RSplit.SubdivideMultiFaceMultipleDirection(
+                        inputFaces, splitRatioList, splitAngleList);
                 }
 
-                int currentIter = 0;
-                foreach (NFace face in splitGroup_Tuple.Item2.faceList)
+                List<NMesh> childMeshes = splitResult.Item2;
+
+                for (int i = 0; i < inputNode.children.Count; i++)
                 {
-                    face.updateEdgeConnectivity();
+                    var child = inputNode.children[i];
 
-                    /// Added 180check
-                    face.checkFor180Angle();
-                    face.checkForZeroEdge();
-                    face.flipRH();
-                    face.checkFor180Angle();
-                    face.checkForZeroEdge();
-                    face.flipRH();
+                    if (i < childMeshes.Count && childMeshes[i].faceList.Count > 0)
+                    {
+                        NMesh childMesh = childMeshes[i];
 
-                    // add merge id to each face.
-                    face.merge_id = mergeIdList[currentIter];
-                    face.unique_id = uniqueIdList[currentIter];
-                    face.neighbors_id = neighborIdList[currentIter];
-                    currentIter++;
+                        foreach (NFace face in childMesh.faceList)
+                        {
+                            face.updateEdgeConnectivity();
+                            face.checkFor180Angle();
+                            face.checkForZeroEdge();
+                            face.flipRH();
+                            face.checkFor180Angle();
+                            face.checkForZeroEdge();
+                            face.flipRH();
 
-                    //Console.WriteLine(face.edgeList.Count);
-                }
-                //Console.WriteLine("split");
+                            face.merge_id = mergeIdList[i];
+                            face.unique_id = uniqueIdList[i];
+                            face.neighbors_id = neighborIdList[i];
+                        }
 
-
-
-                // assign the split meshes to the children of the input tree
-
-                int iterator = 0;
-                int numChildren = inputNode.children.Count;
-
-                foreach (var child in inputNode.children)
-                {
-                    // Add a mesh to each child
-                    child.treeNodeMesh = new NMesh(splitGroup_Tuple.Item2.faceList[0]);
-                    splitGroup_Tuple.Item2.faceList.RemoveAt(0);
-                    iterator++;
-
-                    // Add the rest of the faces to the last child
-                    if (iterator >= numChildren)
-                        child.treeNodeMesh.faceList.AddRange(splitGroup_Tuple.Item2.faceList);
-
-                    //print mesh of child
-                    //Console.WriteLine(child.name);
-                    //Console.WriteLine(child.treeNodeMesh);
+                        child.treeNodeMesh = childMesh;
+                    }
+                    else
+                    {
+                        child.treeNodeMesh = new NMesh(new List<NFace>());
+                    }
                 }
                 return true;
             }
