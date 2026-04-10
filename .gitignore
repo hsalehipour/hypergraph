@@ -28,3 +28,4 @@ RGeoTest/
 # Environment and database
 .env
 database/database.json
+.nuget/

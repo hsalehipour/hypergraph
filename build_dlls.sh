@@ -76,14 +76,26 @@ else
     echo "  mcs:        $(mcs --version 2>&1 | head -n1)"
 fi
 
-if ! command -v nuget &> /dev/null; then
-    echo "  WARNING: nuget not found — package restore will be skipped"
-    echo "           Install with: sudo apt-get install nuget"
+if ! command -v nuget &> /dev/null && ! command -v mono &> /dev/null; then
+    echo "  WARNING: neither nuget nor mono found — package restore may fail"
+    echo "           Install with: sudo apt-get install nuget mono-complete"
 fi
 
 if [ ! -f "$RGEOLIB_CSPROJ" ]; then
     echo "ERROR: RGeoLib.csproj not found at $RGEOLIB_CSPROJ"
     exit 1
+fi
+
+# Fix 3: Copy RhinoCommon.dll to where the csproj expects it
+RHINO_DLL_DIR="$HYPERGRAPH_DIR/_currentRelease"
+RHINO_DLL="$RHINO_DLL_DIR/RhinoCommon.dll"
+RHINO_DLL_SOURCE="$HYPERGRAPH_DIR/samples/_requiredDLLs/RhinoCommon.dll"
+if [ ! -f "$RHINO_DLL" ] && [ -f "$RHINO_DLL_SOURCE" ]; then
+    mkdir -p "$RHINO_DLL_DIR"
+    cp "$RHINO_DLL_SOURCE" "$RHINO_DLL"
+    echo "  Copied RhinoCommon.dll to _currentRelease/"
+elif [ ! -f "$RHINO_DLL" ]; then
+    echo "  WARNING: RhinoCommon.dll not found — Rhino-dependent code will fail to compile"
 fi
 
 echo ""
@@ -93,13 +105,49 @@ echo ""
 # ------------------------------------------
 echo "[2/5] Restoring NuGet packages..."
 
-if command -v nuget &> /dev/null; then
-    nuget restore "$RGEOLIB_PROJECT/packages.config" \
+# Fix 1: System nuget (v2.8) is too old for several packages.
+# Download a modern nuget.exe and run it via mono instead.
+NUGET_CMD=""
+NUGET_LOCAL="$HYPERGRAPH_DIR/.nuget/nuget.exe"
+NUGET_URL="https://dist.nuget.org/win-x86-commandline/v6.9.1/nuget.exe"
+
+download_file() {
+    local url="$1" dest="$2"
+    if command -v wget &> /dev/null; then
+        wget -q -O "$dest" "$url" 2>/dev/null && return 0
+    fi
+    if command -v curl &> /dev/null; then
+        env -u LD_LIBRARY_PATH curl -fsSL -o "$dest" "$url" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+if [ -f "$NUGET_LOCAL" ]; then
+    NUGET_CMD="mono $NUGET_LOCAL"
+    echo "  Using local nuget.exe"
+elif command -v mono &> /dev/null; then
+    echo "  Downloading modern NuGet CLI (system nuget is too old)..."
+    mkdir -p "$HYPERGRAPH_DIR/.nuget"
+    if download_file "$NUGET_URL" "$NUGET_LOCAL"; then
+        NUGET_CMD="mono $NUGET_LOCAL"
+        echo "  Downloaded nuget.exe to $HYPERGRAPH_DIR/.nuget/"
+    else
+        echo "  WARNING: Failed to download nuget.exe, falling back to system nuget"
+        command -v nuget &> /dev/null && NUGET_CMD="nuget"
+    fi
+elif command -v nuget &> /dev/null; then
+    NUGET_CMD="nuget"
+    echo "  WARNING: Using system nuget (may be too old for some packages)"
+fi
+
+if [ -n "$NUGET_CMD" ]; then
+    $NUGET_CMD restore "$RGEOLIB_PROJECT/packages.config" \
         -PackagesDirectory "$NUGET_PACKAGES_DIR" \
-        -NonInteractive 2>&1 | tail -3
+        -Source "https://api.nuget.org/v3/index.json" \
+        -NonInteractive 2>&1 | tail -5
     echo "  Done."
 else
-    echo "  Skipped (nuget not available)."
+    echo "  Skipped (nuget not available and download failed)."
 fi
 
 echo ""
@@ -114,9 +162,12 @@ if [[ "$CLEAN" -eq 1 ]]; then
     rm -rf "$RGEOLIB_PROJECT/bin" "$RGEOLIB_PROJECT/obj"
 fi
 
+# Fix 2: xbuild needs obj/ to exist for _RecordCleanFile target
+mkdir -p "$RGEOLIB_PROJECT/obj/$CONFIGURATION"
+
 cd "$HYPERGRAPH_DIR/ResearchGeometryLibrary"
 $BUILD_TOOL /p:Configuration=$CONFIGURATION RGeoLib/RGeoLib.csproj 2>&1 \
-    | grep -E '(error CS|Build succeeded|Build FAILED|Warning\(s\)|Error\(s\)|Time Elapsed)'
+    | grep -E '(error[ :]|Build succeeded|Build FAILED|Warning\(s\)|Error\(s\)|Time Elapsed)'
 cd "$SCRIPT_DIR"
 
 if [ ! -f "$RGEOLIB_DLL" ]; then
