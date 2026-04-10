@@ -2225,8 +2225,6 @@ namespace RGeoLib
 
             foreach (NFace face in faces)
             {
-                double minFragArea = face.Area * 0.005;
-
                 NMesh leftMesh = RClipper.clipperIntersection(face, finalHalfPlane);
                 NMesh rightMesh = RClipper.clipperDifference(face, finalHalfPlane);
 
@@ -2237,8 +2235,7 @@ namespace RGeoLib
                         f.updateEdgeConnectivity();
                         f.checkFor180Angle();
                         f.mergeDuplicateVertex();
-                        if (f.Area > minFragArea)
-                            allLeft.Add(f);
+                        allLeft.Add(f);
                     }
                 }
 
@@ -2249,8 +2246,7 @@ namespace RGeoLib
                         f.updateEdgeConnectivity();
                         f.checkFor180Angle();
                         f.mergeDuplicateVertex();
-                        if (f.Area > minFragArea)
-                            allRight.Add(f);
+                        allRight.Add(f);
                     }
                 }
             }
